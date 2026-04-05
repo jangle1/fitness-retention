@@ -116,6 +116,45 @@ export function PublicBookingView({
     const startsAt = new Date(selectedSlot);
     const endsAt = new Date(startsAt.getTime() + SESSION_DURATION * 60000);
 
+    // Check tier caps
+    if (trainer.tier === "free") {
+      // Check session cap (20/month)
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const { count: sessionCount } = await supabase
+        .from("bookings")
+        .select("id", { count: "exact", head: true })
+        .eq("trainer_id", trainer.id)
+        .gte("starts_at", monthStart.toISOString())
+        .neq("status", "cancelled");
+
+      if ((sessionCount || 0) >= 20) {
+        setError("This trainer's free plan session limit has been reached for the month. Please contact them directly.");
+        setLoading(false);
+        return;
+      }
+
+      // Check client cap (10 active)
+      const { count: clientCount } = await supabase
+        .from("clients")
+        .select("id", { count: "exact", head: true })
+        .eq("trainer_id", trainer.id);
+
+      const { data: existingCheck } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("trainer_id", trainer.id)
+        .eq("email", email)
+        .single();
+
+      if (!existingCheck && (clientCount || 0) >= 10) {
+        setError("This trainer's free plan client limit has been reached. Please contact them directly.");
+        setLoading(false);
+        return;
+      }
+    }
+
     // Find or create client
     const { data: existingClient } = await supabase
       .from("clients")

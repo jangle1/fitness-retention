@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import type { Client, Booking, Package, Trainer } from "@/types/database";
+import { generateReportHTML } from "@/lib/report-html";
 
 interface ClientWithStats extends Client {
   total_bookings: number;
@@ -331,6 +332,38 @@ export default function ClientsPage() {
                       <Button type="button" size="sm" variant="outline" onClick={() => setShowAddPackage(false)}>Cancel</Button>
                     </div>
                   </form>
+                )}
+
+                {/* Progress Report (paid only) */}
+                {trainer?.tier === "paid" && (
+                  <>
+                    <Separator />
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium">Progress Report</p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={async () => {
+                            const res = await fetch(`/api/reports/${selectedClient.id}`);
+                            if (res.ok) {
+                              const report = await res.json();
+                              const w = window.open("", "_blank");
+                              if (w) {
+                                w.document.write(generateReportHTML(report));
+                                w.document.close();
+                              }
+                            }
+                          }}
+                        >
+                          Generate Report
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Auto-generated progress card you can share with the client
+                      </p>
+                    </div>
+                  </>
                 )}
               </div>
             </>

@@ -57,6 +57,15 @@ export function BookingDetailSheet({
       new_starts_at: booking.starts_at,
     });
 
+    // If attended, create a rating entry and trigger rating email
+    if (status === "attended") {
+      fetch("/api/bookings/request-rating", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: booking.id }),
+      }).catch(() => {});
+    }
+
     // If attended, increment package counter
     if (status === "attended" && booking.package_id) {
       const { data: pkg } = await supabase

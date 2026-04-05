@@ -5,8 +5,9 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { Booking, Trainer } from "@/types/database";
+import type { Booking, Trainer, Nudge } from "@/types/database";
 import { BookingDetailSheet } from "@/components/booking/booking-detail-sheet";
+import { NudgesBanner } from "@/components/nudges-banner";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 6;
@@ -42,6 +43,7 @@ export default function CalendarPage() {
   const [bookings, setBookings] = useState<(Booking & { client_name?: string })[]>([]);
   const [weekOffset, setWeekOffset] = useState(0);
   const [selectedBooking, setSelectedBooking] = useState<(Booking & { client_name?: string }) | null>(null);
+  const [nudges, setNudges] = useState<(Nudge & { client_name?: string })[]>([]);
   const weekDates = getWeekDates(weekOffset);
 
   const loadData = useCallback(async () => {
@@ -74,6 +76,26 @@ export default function CalendarPage() {
           client_name: (booking.clients as { full_name: string } | null)?.full_name,
         }))
       );
+    }
+
+    // Load nudges (paid only)
+    if ((t as Trainer)?.tier === "paid") {
+      const { data: n } = await supabase
+        .from("nudges")
+        .select("*, clients(full_name)")
+        .eq("trainer_id", t?.id)
+        .eq("dismissed", false)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (n) {
+        setNudges(
+          n.map((nudge: Record<string, unknown>) => ({
+            ...(nudge as unknown as Nudge),
+            client_name: (nudge.clients as { full_name: string } | null)?.full_name,
+          }))
+        );
+      }
     }
   }, [weekOffset]);
 
@@ -111,6 +133,14 @@ export default function CalendarPage() {
           </Button>
         </div>
       </div>
+
+      {nudges.length > 0 && (
+        <NudgesBanner nudges={nudges} onDismiss={async (id) => {
+          const supabase = createClient();
+          await supabase.from("nudges").update({ dismissed: true }).eq("id", id);
+          setNudges(nudges.filter((n) => n.id !== id));
+        }} />
+      )}
 
       {/* Week header */}
       <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b">

@@ -24,6 +24,10 @@ export type BookingEventType =
 
 export type PackageStatus = "active" | "completed" | "expired";
 
+export type TrainerTier = "free" | "paid";
+
+export type NudgeType = "inactive_client" | "package_expiring";
+
 // Row types used throughout the app
 export interface Trainer {
   id: string;
@@ -37,8 +41,45 @@ export interface Trainer {
   google_refresh_token: string | null;
   google_sync_token: string | null;
   avatar_url: string | null;
+  tier: TrainerTier;
+  bio: string | null;
+  city: string | null;
+  specialties: string[] | null;
+  brand_primary_color: string;
+  brand_hide_logo: boolean;
+  referral_code: string;
+  referred_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Rating {
+  id: string;
+  booking_id: string;
+  trainer_id: string;
+  client_id: string;
+  score: number;
+  comment: string | null;
+  token: string;
+  created_at: string;
+}
+
+export interface ReferralCredit {
+  id: string;
+  referrer_id: string;
+  referred_id: string;
+  booking_id: string | null;
+  status: "pending" | "credited" | "expired";
+  created_at: string;
+}
+
+export interface Nudge {
+  id: string;
+  trainer_id: string;
+  client_id: string;
+  type: NudgeType;
+  dismissed: boolean;
+  created_at: string;
 }
 
 export interface Client {
