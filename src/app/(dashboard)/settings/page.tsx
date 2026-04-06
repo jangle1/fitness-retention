@@ -4,16 +4,21 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
 import type { Trainer, AvailabilityRule } from "@/types/database";
-import { AvailabilityEditor } from "@/components/availability-editor";
 import { QRCodeDisplay } from "@/components/qr-code";
 import { getEmbedCode } from "@/components/review-badge";
+
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAY_MAP = [1, 2, 3, 4, 5, 6, 0]; // Mon=1...Sun=0
+
+const SPECIALTY_OPTIONS = [
+  "Strength Training", "Cardio", "HIIT", "Yoga",
+  "Pilates", "Rehabilitation", "Stretching", "Boxing",
+  "CrossFit", "Calisthenics", "Mobility", "Nutrition",
+];
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -23,65 +28,95 @@ export default function SettingsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [embedCopied, setEmbedCopied] = useState(false);
 
+  // Editable fields
+  const [fullName, setFullName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [bio, setBio] = useState("");
+  const [city, setCity] = useState("");
+  const [specialties, setSpecialties] = useState<string[]>([]);
+  const [activeDays, setActiveDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [sessionDuration, setSessionDuration] = useState(60);
+  const [bufferMinutes, setBufferMinutes] = useState(10);
+
   useEffect(() => {
     async function load() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: t } = await supabase
-        .from("trainers")
-        .select("*")
-        .eq("supabase_auth_id", user.id)
-        .single();
-      if (t) setTrainer(t as Trainer);
+      const { data: t } = await supabase.from("trainers").select("*").eq("supabase_auth_id", user.id).single();
+      if (t) {
+        const tr = t as Trainer;
+        setTrainer(tr);
+        setFullName(tr.full_name);
+        setSlug(tr.slug);
+        setBio(tr.bio || "");
+        setCity(tr.city || "");
+        setSpecialties(tr.specialties || []);
+        setBufferMinutes(tr.buffer_minutes);
+      }
 
       const { data: r } = await supabase
-        .from("availability_rules")
-        .select("*")
+        .from("availability_rules").select("*")
         .eq("trainer_id", t?.id)
-        .order("day_of_week")
-        .order("start_time");
-      if (r) setRules(r as AvailabilityRule[]);
+        .order("day_of_week").order("start_time");
+      if (r) {
+        setRules(r as AvailabilityRule[]);
+        const days = [...new Set((r as AvailabilityRule[]).map((rule) => rule.day_of_week))];
+        if (days.length > 0) setActiveDays(days);
+      }
     }
     load();
   }, []);
 
-  async function handleSaveProfile(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  function toggleSpecialty(s: string) {
+    setSpecialties((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]);
+  }
+
+  function toggleDay(day: number) {
+    setActiveDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort());
+  }
+
+  async function handleSave() {
     if (!trainer) return;
     setSaving(true);
     setMessage(null);
 
-    const formData = new FormData(e.currentTarget);
     const supabase = createClient();
 
+    // Update trainer profile
     const updateData: Record<string, unknown> = {
-      full_name: formData.get("fullName") as string,
-      buffer_minutes: parseInt(formData.get("bufferMinutes") as string, 10),
-      bio: (formData.get("bio") as string) || null,
-      city: (formData.get("city") as string) || null,
-      specialties: (formData.get("specialties") as string)
-        ?.split(",")
-        .map((s) => s.trim())
-        .filter(Boolean) || null,
+      full_name: fullName,
+      buffer_minutes: bufferMinutes,
+      bio: bio || null,
+      city: city || null,
+      specialties: specialties.length > 0 ? specialties : null,
     };
 
-    // Paid-only fields
     if (trainer.tier === "paid") {
-      updateData.brand_primary_color = (formData.get("brandColor") as string) || "#0f172a";
-      updateData.brand_hide_logo = formData.get("hideLogo") === "on";
+      updateData.brand_primary_color = trainer.brand_primary_color;
+      updateData.brand_hide_logo = trainer.brand_hide_logo;
     }
 
-    const { error } = await supabase
-      .from("trainers")
-      .update(updateData)
-      .eq("id", trainer.id);
+    const { error } = await supabase.from("trainers").update(updateData).eq("id", trainer.id);
+
+    // Update availability rules
+    await supabase.from("availability_rules").delete().eq("trainer_id", trainer.id);
+    const newRules = activeDays.map((day) => ({
+      trainer_id: trainer.id,
+      day_of_week: day,
+      start_time: "08:00",
+      end_time: "17:00",
+    }));
+    if (newRules.length > 0) {
+      await supabase.from("availability_rules").insert(newRules);
+    }
 
     setSaving(false);
     if (!error) {
       setTrainer({ ...trainer, ...updateData } as Trainer);
       setMessage("Saved!");
+      setTimeout(() => setMessage(null), 2000);
     } else {
       setMessage(error.message);
     }
@@ -100,210 +135,216 @@ export default function SettingsPage() {
   const isPaid = trainer.tier === "paid";
 
   return (
-    <div className="mx-auto max-w-2xl px-4 pt-6 md:pt-20 space-y-6 pb-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Settings</h1>
-        <Badge variant={isPaid ? "default" : "secondary"}>
-          {isPaid ? "Pro" : "Free"}
-        </Badge>
+    <div className="mx-auto max-w-2xl px-4 pt-4 md:pt-20 space-y-8 pb-24 md:pb-8">
+      <h1 className="text-2xl font-extrabold">Settings</h1>
+
+      {/* PROFILE section */}
+      <div className="space-y-5">
+        <div className="flex items-center gap-2">
+          <svg className="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+          </svg>
+          <h2 className="text-sm font-bold uppercase tracking-wider text-primary">Profile</h2>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Full name</label>
+          <Input
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            className="h-14 rounded-2xl bg-card border-border text-base px-5"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Slug (URL)</label>
+          <div className="flex items-center h-14 rounded-2xl bg-card border border-border overflow-hidden">
+            <span className="text-sm text-muted-foreground pl-5 shrink-0">fitbook.pl/</span>
+            <input
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              className="flex-1 h-full bg-transparent text-base outline-none px-1"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Bio</label>
+          <Textarea
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            placeholder="A few words about you and your methods..."
+            rows={3}
+            className="rounded-2xl bg-card border-border px-5 py-4"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">City</label>
+          <Input
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            placeholder="e.g. Warsaw"
+            className="h-14 rounded-2xl bg-card border-border text-base px-5"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Specializations</label>
+          <div className="flex flex-wrap gap-2">
+            {SPECIALTY_OPTIONS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleSpecialty(s)}
+                className={`px-3.5 py-2 rounded-full text-sm font-medium border transition-all ${
+                  specialties.includes(s)
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card border-border text-muted-foreground hover:border-muted-foreground"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Booking Link & QR */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Your Booking Link</h2>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Input value={bookingUrl} readOnly className="font-mono text-sm" />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                navigator.clipboard.writeText(bookingUrl);
-              }}
-            >
-              Copy
-            </Button>
-          </div>
-          <QRCodeDisplay url={bookingUrl} size={180} />
-          <p className="text-xs text-muted-foreground text-center">
-            Print this on business cards, gym posters, or share on social media
-          </p>
-        </CardContent>
-      </Card>
+      <Separator className="bg-border" />
 
-      {/* Review Badge Embed */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Review Badge</h2>
-          <p className="text-sm text-muted-foreground">Embed your rating anywhere — website, Instagram linktree, etc.</p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={`/api/badge/${trainer.slug}`} alt="Review badge" />
+      {/* AVAILABILITY section */}
+      <div className="space-y-5">
+        <div className="flex items-center gap-2">
+          <svg className="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <h2 className="text-sm font-bold uppercase tracking-wider text-primary">Availability</h2>
+        </div>
+
+        <div className="space-y-3">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Active days</label>
+          <div className="grid grid-cols-7 gap-2">
+            {DAYS.map((day, i) => {
+              const dayNum = DAY_MAP[i];
+              const isActive = activeDays.includes(dayNum);
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => toggleDay(dayNum)}
+                  className={`h-12 rounded-2xl text-sm font-bold border transition-all ${
+                    isActive
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card border-border text-muted-foreground hover:border-muted-foreground"
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
           </div>
-          <div className="relative">
-            <Input
-              value={getEmbedCode(trainer.slug, appUrl)}
-              readOnly
-              className="font-mono text-xs pr-16"
-            />
-            <Button
-              variant="outline"
-              size="xs"
-              className="absolute right-1 top-1"
-              onClick={() => {
-                navigator.clipboard.writeText(getEmbedCode(trainer.slug, appUrl));
-                setEmbedCopied(true);
-                setTimeout(() => setEmbedCopied(false), 2000);
-              }}
-            >
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Session length</label>
+            <div className="grid grid-cols-3 gap-2">
+              {[45, 60, 90].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setSessionDuration(d)}
+                  className={`h-12 rounded-2xl text-sm font-bold border transition-all ${
+                    sessionDuration === d
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card border-border text-muted-foreground"
+                  }`}
+                >
+                  {d}&apos;
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Break</label>
+            <div className="grid grid-cols-3 gap-2">
+              {[0, 10, 15].map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setBufferMinutes(b)}
+                  className={`h-12 rounded-2xl text-sm font-bold border transition-all ${
+                    bufferMinutes === b
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card border-border text-muted-foreground"
+                  }`}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <Separator className="bg-border" />
+
+      {/* QR Code & Booking Link */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <svg className="h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+          </svg>
+          <h2 className="text-sm font-bold uppercase tracking-wider text-primary">Booking Link</h2>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Input value={bookingUrl} readOnly className="h-12 rounded-2xl bg-card border-border font-mono text-sm px-5" />
+          <Button variant="outline" size="sm" className="rounded-xl h-12 px-4 shrink-0" onClick={() => navigator.clipboard.writeText(bookingUrl)}>
+            Copy
+          </Button>
+        </div>
+
+        <QRCodeDisplay url={bookingUrl} size={160} />
+
+        <div className="space-y-2">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Embed review badge</label>
+          <div className="flex items-center gap-2">
+            <Input value={getEmbedCode(trainer.slug, appUrl)} readOnly className="h-12 rounded-2xl bg-card border-border font-mono text-xs px-5" />
+            <Button variant="outline" size="sm" className="rounded-xl h-12 px-4 shrink-0" onClick={() => { navigator.clipboard.writeText(getEmbedCode(trainer.slug, appUrl)); setEmbedCopied(true); setTimeout(() => setEmbedCopied(false), 2000); }}>
               {embedCopied ? "Copied!" : "Copy"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Profile */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Profile</h2>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSaveProfile} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="fullName">Full Name</Label>
-              <Input id="fullName" name="fullName" defaultValue={trainer.full_name} required />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="city">City</Label>
-              <Input id="city" name="city" defaultValue={trainer.city || ""} placeholder="e.g. Warsaw, Poland" />
-              <p className="text-xs text-muted-foreground">Helps clients find you via search</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="bio">Bio</Label>
-              <Textarea id="bio" name="bio" defaultValue={trainer.bio || ""} placeholder="Tell clients about yourself..." rows={3} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="specialties">Specialties</Label>
-              <Input id="specialties" name="specialties" defaultValue={trainer.specialties?.join(", ") || ""} placeholder="e.g. strength, yoga, rehab" />
-              <p className="text-xs text-muted-foreground">Comma-separated</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="bufferMinutes">Buffer between sessions (min)</Label>
-              <Input
-                id="bufferMinutes"
-                name="bufferMinutes"
-                type="number"
-                min={0}
-                max={120}
-                defaultValue={trainer.buffer_minutes}
-                required
-              />
-            </div>
-
-            {/* Paid-only: Branding */}
-            {isPaid && (
-              <>
-                <Separator />
-                <h3 className="text-sm font-semibold">Custom Branding</h3>
-                <div className="space-y-2">
-                  <Label htmlFor="brandColor">Brand Color</Label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="color"
-                      id="brandColor"
-                      name="brandColor"
-                      defaultValue={trainer.brand_primary_color}
-                      className="w-10 h-10 rounded border cursor-pointer"
-                    />
-                    <span className="text-sm text-muted-foreground">{trainer.brand_primary_color}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="hideLogo"
-                    name="hideLogo"
-                    defaultChecked={trainer.brand_hide_logo}
-                    className="rounded"
-                  />
-                  <Label htmlFor="hideLogo" className="text-sm">Hide FitBook branding on booking page</Label>
-                </div>
-              </>
-            )}
-
-            {message && <p className="text-sm text-muted-foreground">{message}</p>}
-            <Button type="submit" disabled={saving}>
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      {/* Availability */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Availability</h2>
-          <p className="text-sm text-muted-foreground">Set your weekly working hours.</p>
-        </CardHeader>
-        <CardContent>
-          <AvailabilityEditor trainerId={trainer.id} initialRules={rules} />
-        </CardContent>
-      </Card>
-
-      {/* Referral */}
-      <Card>
-        <CardHeader>
-          <h2 className="text-lg font-semibold">Referral Program</h2>
-          <p className="text-sm text-muted-foreground">
-            {isPaid
-              ? "Share your referral code with other trainers. When they sign up, you both get benefits."
-              : "Upgrade to Pro to access the coach referral network."}
-          </p>
-        </CardHeader>
-        <CardContent>
-          {isPaid ? (
-            <div className="flex items-center gap-2">
-              <Input value={`${appUrl}/login?ref=${trainer.referral_code}`} readOnly className="font-mono text-sm" />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigator.clipboard.writeText(`${appUrl}/login?ref=${trainer.referral_code}`)}
-              >
-                Copy
-              </Button>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-dashed p-4 text-center">
-              <p className="text-sm text-muted-foreground mb-2">Available on Pro plan</p>
-              <Button size="sm" variant="outline">Upgrade to Pro — 20 PLN/mo</Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Upgrade CTA for free tier */}
       {!isPaid && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardContent className="pt-6 text-center space-y-3">
+        <>
+          <Separator className="bg-border" />
+          <div className="rounded-2xl border-2 border-primary/30 bg-primary/5 p-6 text-center space-y-3">
             <h2 className="text-lg font-bold">Upgrade to Pro</h2>
             <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-              Unlimited clients & sessions, SMS reminders, re-engagement nudges, progress reports, custom branding, and referral network.
+              Unlimited clients, SMS reminders, nudges, progress reports, custom branding, and referral network.
             </p>
             <p className="text-2xl font-bold">20 PLN<span className="text-sm font-normal text-muted-foreground">/month</span></p>
-            <Button size="lg">Upgrade Now</Button>
-          </CardContent>
-        </Card>
+            <Button size="lg" className="rounded-2xl">Upgrade Now</Button>
+          </div>
+        </>
       )}
 
-      <Separator />
-
-      <div className="flex justify-end">
-        <Button variant="destructive" onClick={handleSignOut}>
+      {/* Save + Sign out */}
+      <div className="flex items-center justify-between pt-2">
+        <Button
+          variant="outline"
+          className="rounded-2xl text-destructive border-destructive/30 hover:bg-destructive/10"
+          onClick={handleSignOut}
+        >
           Sign out
+        </Button>
+        <Button className="rounded-2xl px-8 font-bold" onClick={handleSave} disabled={saving}>
+          {saving ? "Saving..." : message || "Save"}
         </Button>
       </div>
     </div>

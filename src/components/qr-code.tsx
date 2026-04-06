@@ -11,7 +11,7 @@ export function QRCodeDisplay({ url, size = 200 }: { url: string; size?: number 
       QRCode.toCanvas(canvasRef.current, url, {
         width: size,
         margin: 2,
-        color: { dark: "#0f172a", light: "#ffffff" },
+        color: { dark: "#d4f542", light: "#1a1a1f" },
       });
     }
   }, [url, size]);
